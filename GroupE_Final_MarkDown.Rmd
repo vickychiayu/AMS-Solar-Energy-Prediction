@@ -1,0 +1,536 @@
+--- 
+title: "Final Project: Solar panel analysis"
+author: "Group E"
+output:
+  html_document:
+    fig_caption: yes
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    fig_caption: yes
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+<!-- Code chunk -->
+```{r, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, eval = TRUE, message = FALSE, warning = FALSE);
+library(data.table);
+library(ggplot2);
+library(outliers);
+library(leaflet);
+library(caret)
+library(scales);
+library(corrplot);
+
+folder_path <- "/Users/vickylin/Desktop/MBD/R/workgroup_project"
+
+dt <- readRDS(file.path(folder_path, "solar_dataset.RData"));
+dt <- as.data.table(dt);
+
+station_info <- read.table(file.path(folder_path, "station_info.csv"), sep = ",", header = TRUE);
+station_info <- as.data.table(station_info);
+
+```
+
+<hr />
+
+## EDA: preparation
+<!-- Text and format chunk -->
+First, we split the dataset in three sub-sets (**S1**, **S2** and **S3**) for further analysis.
+
+- **S1**: Historic station production data
+- **S2**: PCA data (upper part, up to Row *5113*)
+- **S3**: PCA data (lower part, from Row *5114*)
+
+```{r, echo = TRUE}
+dt_s1_orig <- as.data.frame(na.omit(dt[, 2:99], invert=FALSE)); 
+dt_s2_orig <- as.data.frame(dt[1:nrow(dt_s1_orig), 100:456]); 
+dt_s3_orig <- as.data.frame(1+dt[nrow(dt_s2_orig):nrow(dt), 100:456]); 
+```
+
+<hr />
+
+## [1.1] Compute Statistcs
+<!-- Text and format chunk -->
+We computed the same statistic measures for Sections S1, S2 and S3 separately.
+
+The analysis of S1, being the most relevant output at this point, delivered the following output:
+
+```{r, echo = FALSE}
+station <- colnames(dt_s1_orig);
+mean_station <- sapply(dt_s1_orig, mean, na.rm=TRUE);
+sd_station <- sapply(dt_s1_orig, sd, na.rm=TRUE);
+quantile_station <- sapply(dt_s1_orig, quantile, na.rm=TRUE);
+
+statistics_s1 <- data.table(Station = c(station),
+                 Mean = mean_station,
+                 Sd = sd_station,
+                 Min = quantile_station[1,],
+                 Sec_qrt = quantile_station[2,],
+                 Median = quantile_station[3,],
+                 Fourth_qrt = quantile_station[4,],
+                 Max = quantile_station[5,]
+); 
+```
+
+
+```{r, echo = TRUE}
+head(statistics_s1)
+```
+
+As mentioned before, we conducted the **same analysis** for S2 and S3 as well, resulting in datatables with the same respective structure.
+
+<hr />
+
+## [1.2] Outlier detection
+
+To identify outliers in the dataset, we used a **1.5 * IQR** benchmark for Max and Min and we ran a *for*-loop.
+
+```{r, include=FALSE, echo = FALSE}
+dt_s1_orig.iqr <- dt_s1_orig
+
+Outliers <- c()
+
+for(i in 1:98){
+  
+  max <- quantile(dt_s1_orig.iqr[,i],0.75, na.rm=TRUE) + (IQR(dt_s1_orig.iqr[,i], na.rm=TRUE) * 1.5 )
+  min <- quantile(dt_s1_orig.iqr[,i],0.25, na.rm=TRUE) - (IQR(dt_s1_orig.iqr[,i], na.rm=TRUE) * 1.5 )
+  
+  idx <<- which(dt_s1_orig.iqr[,i] < min | dt_s1_orig.iqr[,i] > max)
+  
+  print(paste(i, length(idx), sep=''))
+  
+  Outliers <<- c(Outliers, idx) 
+}
+
+Outliers
+```
+
+This identified that in the S1 dataset there are **0 outliers** within our defined benchmark. We therefore did not see the need to adjust the dataset.
+
+<hr />
+
+## [1.3] Statistical Visualization 
+
+In this section, we first mapped the stations using *Leaflet*, next we plotted the *statistical analysis* output from above.
+
+<hr />
+
+##### Leaflet map
+
+We clustered the stations by production mean:
+
+- <span style="color:blue">**Blue**</span>: Mean >17m
+- <span style="color:green">**Green**</span>: Mean between 16m and 17m
+- <span style="color:red">**Red**</span>: Mean <16m
+
+```{r, echo = FALSE}
+map <- leaflet();
+map <- addTiles(map);
+
+for (i in 1:nrow(station_info)){
+  map <- addCircleMarkers(map, lng = as.numeric(station_info[i,3]), lat = as.numeric(station_info[i,2]),
+                          label=paste0(colnames(dt_s1_orig[i])," with production mean ",round(statistics_s1[i,2]/1000000, 1),"m"), 
+                          labelOptions = labelOptions(noHide = F), radius = 7, 
+                          color = if(as.numeric(round(statistics_s1[i,2]/1000000, 1)) < 16) {"red"}
+                          else if (as.numeric(round(statistics_s1[i,2]/1000000, 1)) >= 16 & as.numeric(round(statistics_s1[i,2]/1000000, 1)) < 17) {"green"}
+                          else {"blue"}
+  )};
+map;
+```
+
+<hr />
+
+##### Group details {.tabset .tabset-fade .tabset-pills}
+
+###### Blue
+
+```{r, echo = FALSE}
+blue_st <- c()
+blue_mean <- c()
+
+for (i in 1:nrow(station_info)){
+  if(as.numeric(round(statistics_s1[i,2]/1000000, 1)) > 17){
+    blue_st <- matrix(append(blue_st,statistics_s1[i,1]));
+    blue_mean <- matrix(append(blue_mean,statistics_s1[i,2]))}
+}
+
+blue <- matrix(c(blue_st,blue_mean), ncol=2)
+blue <- as.data.table(blue); setnames(blue, c("Station","Mean"))
+```
+
+```{r,}
+head(blue)
+nrow(blue)
+```
+
+Selected Example for further analysis: **GOOD**
+
+<hr />
+
+###### Green
+
+
+```{r, echo = FALSE}
+green_st <- c()
+green_mean <- c()
+
+for (i in 1:nrow(station_info)){
+  if(as.numeric(round(statistics_s1[i,2]/1000000, 1)) >= 16 & as.numeric(round(statistics_s1[i,2]/1000000, 1)) < 17){
+    green_st <- matrix(append(green_st,statistics_s1[i,1]));
+    green_mean <- matrix(append(green_mean,statistics_s1[i,2]))}
+}
+
+green <- matrix(c(green_st,green_mean), ncol=2)
+green <- as.data.table(green); setnames(green, c("Station","Mean"))
+```
+
+```{r,}
+head(green)
+nrow(green)
+```
+
+Selected Example for further analysis: **ACME**
+
+<hr />
+
+
+###### Red
+
+```{r, echo = FALSE}
+red_st <- c()
+red_mean <- c()
+
+for (i in 1:nrow(station_info)){
+  if(as.numeric(round(statistics_s1[i,2]/1000000, 1)) < 16){
+    red_st <- matrix(append(red_st,statistics_s1[i,1]));
+    red_mean <- matrix(append(red_mean,statistics_s1[i,2]))}
+}
+
+red <- matrix(c(red_st,red_mean), ncol=2)
+red <- as.data.table(red); setnames(red, c("Station","Mean"))
+```
+
+```{r,}
+head(red)
+nrow(red)
+```
+
+Selected Example for further analysis: **STIG**
+
+<hr />
+
+
+##### Visualization of S1
+
+We first plotted all solar panels according to their daily production means. We highlighted high- and low-performers by labelling them accordingly with their station name.
+
+```{r, echo = FALSE}
+means_plot <- ggplot(statistics_s1, aes(x = statistics_s1$Station, y = statistics_s1$Mean));
+means_plot <- means_plot + geom_point(color = 'red');
+means_plot <- means_plot + ggtitle("Mean of Production by Station") + xlab("Station");
+means_plot <- means_plot + theme(plot.title = element_text(face = "bold"));
+means_plot <- means_plot + scale_y_continuous(name = "Mean (millions)", 
+                                              breaks = waiver(), 
+                                              labels = c("15","16","17","18","19"));
+means_plot <- means_plot + theme(axis.text.x=element_text(angle = 90, vjust = 0.5, size = 5));
+means_plot <- means_plot + geom_text(aes(label = ifelse(Mean > 18000000 | Mean < 15000000, as.character(Station),'')),
+                                     hjust = 0, 
+                                     vjust = 0, 
+                                     size = 3);
+means_plot <- means_plot + theme(panel.background = element_rect(fill = 'white'),
+                                 panel.grid.minor = element_blank(),
+                                 panel.grid.major = element_line(color = "black", linetype = "dotted"),
+                                 panel.grid.major.x = element_blank(),
+                                 axis.line = element_line(colour = "black"));
+means_plot;
+```
+
+<hr />
+
+Next, we also visualized the production standard deviations of each station. Again, we highlighted high- and low-performers by labelling them accordingly with their station name.
+
+```{r, echo = FALSE}
+sd_plot <- ggplot(statistics_s1, aes(x = statistics_s1$Station, y = statistics_s1$Sd));
+sd_plot <- sd_plot + geom_point(color = 'red');
+sd_plot <- sd_plot + ggtitle("Standard Deviation of Production by Station") + xlab("Station");
+sd_plot <- sd_plot + theme(plot.title = element_text(face = "bold"));
+sd_plot <- sd_plot + scale_y_continuous(name = "Standard Deviation (millions)", 
+                                        breaks = waiver(), 
+                                        labels = c("7.5","7.6","7.7","7.8","7.9","8.0","8.1"));
+sd_plot <- sd_plot + theme(axis.text.x=element_text(angle = 90, vjust = 0.5, size = 5));
+sd_plot <- sd_plot + geom_text(aes(label = ifelse(Sd > 8100000 | Sd < 7600000, as.character(Station),'')),
+                               hjust = 0, 
+                               vjust = 0, 
+                               size = 3);
+sd_plot <- sd_plot + theme(panel.background = element_rect(fill = 'white'),
+                           panel.grid.minor = element_blank(),
+                           panel.grid.major = element_line(color = "black", linetype = "dotted"),
+                           panel.grid.major.x = element_blank(),
+                           axis.line = element_line(colour = "black"));
+sd_plot;
+```
+
+<hr />
+
+```{r, echo = FALSE}
+plot(density(10^(-7)*dt_s1_orig[,1]), 
+     main = "Density distribution of Station's solar production", ylim =c(0,0.6),
+     xlab = "Production per station in Joules (*10^7)");
+
+for (i in 2:ncol(dt_s1_orig)){
+  lines(density(10^(-7)*dt_s1_orig[, i]),col=i);
+};
+```
+
+<hr />
+
+##### Visualization of S2 & S3 {.tabset .tabset-fade .tabset-pills}
+
+###### S2 Density
+
+```{r, echo = FALSE}
+plot(density(dt_s2_orig[,1]),
+     main = "Density of Each PCI \n From 1994 to 2007",
+     xlab = "Distribution of PCA values",xlim=c(-60,60),ylim=c(0,0.2));
+for (i in 1:ncol(dt_s2_orig)){
+  lines(density(dt_s2_orig[, i]),col=i);
+};
+```
+
+<hr />
+
+###### S3 Density
+
+```{r, echo = FALSE}
+plot(density(dt_s3_orig[,1]),
+     main = "Density of Each PCI \n From 2008 to 2012-11-30",
+     xlab = "Distribution of PCA values",xlim=c(-60,60),ylim=c(0,0.2));
+for (i in 1:ncol(dt_s3_orig)){
+  lines(density(dt_s3_orig[, i]), col = i)};
+```
+
+<hr />
+
+## [1.4] Data Scaling
+
+We furthermore scaled the data:
+
+```{r, echo = TRUE}
+tipify <- function(x){
+  mu <- mean(x, na.rm = TRUE);
+  s <- sd(x, na.rm = TRUE);
+  s[s == 0] <- 1;
+  x <- (x - mu) / s;
+}
+```
+
+```{r, echo = FALSE}
+df_s1_standard <- as.data.frame(sapply(dt_s1_orig,tipify));
+df_s2_standard <- as.data.frame(sapply(dt_s2_orig,tipify));
+df_s3_standard <- as.data.frame(sapply(dt_s3_orig,tipify));
+```
+
+And we plotted the resulting densities:
+
+<hr />
+
+##### S1
+
+```{r, echo = FALSE}
+plot(density(df_s1_standard[,1]),ylim=c(0,0.5), main = "Density of tipified solar panels' production",
+     xlab = "Distribution of scaled values");
+for (i in 2:ncol(df_s1_standard)){
+  lines(density(df_s1_standard[, i]),col=i)
+}
+```
+
+<hr />
+
+##### Visualization of S2 & S3 {.tabset .tabset-fade .tabset-pills}
+
+###### S2 Density
+
+```{r, echo = FALSE}
+plot(density(df_s2_standard[,1]),ylim=c(0,0.7),main = "Density of tipified predictors' values",
+     xlab = "Distribution of scaled values");
+for (i in 1:ncol(df_s2_standard)){
+  lines(density(df_s2_standard[, i]),col=i)
+}
+```
+
+<hr />
+
+###### S3 Density
+
+```{r, echo = FALSE}
+plot(density(df_s3_standard[,1]),ylim=c(0,0.7),main = "Density of tipified predictors' values",
+     xlab = "Distribution of scaled values");
+for (i in 1:ncol(df_s3_standard)){
+  lines(density(df_s3_standard[, i]),col=i)
+}
+```
+
+<hr />
+
+
+## [1.5] Correlation detection
+
+We analyzed a) correlations between solar panels and respective PCAs and b) correlations between explanatory variables themsevles.
+
+<hr />
+
+##### Correlations between solar panels and PCA
+
+We identified **PCA 1** to be the most relevant explanatory variable for 97 of the 98 solar panels.
+
+The exception was station #60, MTHE, with PCA 2 as most relevant correlation.
+
+```{r, echo = FALSE}
+variable <- c();
+
+for(iterator in 1:98){
+  corr<-(as.data.table(cor(dt_s1_orig[,iterator],dt_s2_orig)));
+  variable <- c(variable, max.col(corr))
+}
+corr_main <- as.data.table(statistics_s1[,1])
+corr_main$Corr_PCA <- variable
+```
+
+```{r}
+head(corr_main)
+```
+
+
+<hr />
+
+
+##### Correlation between explanatory variables themselves
+
+```{r, include=FALSE, echo = FALSE}
+corr_PCA<-cor(dt_s2_orig);
+
+#Remove the own correlation of variables
+for (i in 1:length(colnames(corr_PCA))){
+  corr_PCA[i,i]<-0
+}
+#obtain vector with the highest correlation per PCA to all other PCAs
+max_corr_per_PCA<-c();
+for (i in 1:length(colnames(corr_PCA))){
+  a<-abs(max(abs(corr_PCA[,i])));
+  max_corr_per_PCA<-append(max_corr_per_PCA,a)
+};
+```
+
+```{r}
+max(max_corr_per_PCA);
+```
+
+The highest absolute value of correlation coeficient of each PCA to other PCAs is 0,072.
+Not enough evidence of correlation using this approach to make some PCAs redundant.
+
+
+<hr />
+
+## [1.6] Visualization of correlation 
+
+To get a better understanding of above-conducted analysis we visualized the findings.
+
+<hr />
+
+##### Visualization solar panel to PCA correlation {.tabset .tabset-fade .tabset-pills}
+
+###### Table
+
+```{r, echo=FALSE}
+input_corr<-cor(x=dt_s1_orig,y=df_s2_standard);
+corrplot(input_corr[1:98,1:98],tl.cex = 0.3);
+```
+
+<hr />
+
+###### Histogram
+
+```{r, echo = FALSE}
+variable_df <- as.data.frame(variable);
+hist_fq <- ggplot(variable_df, aes(variable)) + geom_histogram(aes(y=(..count..)), binwidth = 1, color = 'white');
+hist_fq <- hist_fq + ggtitle("Most Correlated PCA") + xlab("PCA") + ylab("Frequency (Sum = 98)"); #add titles
+hist_fq <- hist_fq + theme(plot.title = element_text(face = "bold")); #change the face of main title
+hist_fq <- hist_fq + theme(panel.grid.minor = element_blank(), 
+                           panel.grid.major.x = element_blank(),
+                           axis.line = element_line(colour = "black")); #remove unnecessary grid lines.
+hist_fq <- hist_fq + scale_x_continuous(breaks = c(1,2),
+                                        labels = c("PC1","PC2"));
+hist_fq <- hist_fq + stat_bin(binwidth= 1, geom="label", aes(label=..count..));
+hist_fq;
+```
+
+
+
+<hr />
+
+##### Visualization PCA to PCA correlation {.tabset .tabset-fade .tabset-pills}
+
+###### Table
+
+```{r, echo=FALSE}
+input_corr_PCA<-cor(dt_s2_orig);
+corrplot(input_corr_PCA[1:50,1:50],order = "hclust",tl.cex = 0.5);
+```
+
+<hr />
+
+###### Histogram
+
+```{r, echo = FALSE}
+max_corr_per_PCA_df <- as.data.frame(max_corr_per_PCA);
+hist_cor <- ggplot(max_corr_per_PCA_df, aes(max_corr_per_PCA)) + geom_histogram(aes(y=(..count..)/sum(..count..)), binwidth = 0.005, color = 'white');
+hist_cor <- hist_cor + ggtitle("PCA Correlation") + xlab("Maximum Correlation Coefficient Value") + ylab("Percentage of Total 357 PCA"); #add titles
+hist_cor <- hist_cor + theme(plot.title = element_text(face = "bold")); #change the face of main title
+hist_cor <- hist_cor + theme(panel.grid.minor = element_blank(), 
+                             panel.grid.major.x = element_blank(),
+                             axis.line = element_line(colour = "black")); #remove unnecessary grid lines.
+hist_cor <- hist_cor + scale_y_continuous(labels = percent_format());
+hist_cor;
+```
+
+<hr />
+
+## [1.7] Dimensionality reduction
+
+We used the following code to conduct the **Dimensionality reduction**:
+
+```{r, echo=TRUE}
+select_important <- function(dat, n_vars, y){
+  varimp <- filterVarImp(x = dat, y=y, nonpara=TRUE);
+  varimp <- data.table(variable=rownames(varimp),imp=varimp[, 1]);
+  varimp <- varimp[order(-imp)];
+  selected <- varimp$variable[1:n_vars];
+  return(selected);
+};
+```
+
+We conducted our analysis for three solar panels (Blue: *GOOD*, Green: *ACME*, Red: *STIG*) **representing the three groups identified in section [1.2]**. As the caclulation requires large amounts of CPU and memory (and therefore time), we post the output here instead.
+
+- <span style="color:blue">**Blue [GOOD]**</span>
+ <p><p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[1] "PCA1"  "PCA2"  "PCA4"  "PCA5"  "PCA3"  "PCA6"  "PCA7"  "PCA24" "PCA9"  "PCA32"</p></p>
+
+- <span style="color:green">**Green [ACME]**</span>: 
+ <p><p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[1] "PCA1"  "PCA2"  "PCA7"  "PCA4"  "PCA6"  "PCA5"  "PCA24" "PCA32" "PCA26" "PCA35"</p></p>
+
+- <span style="color:red">**Red [STIG]**</span>:
+ <p><p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[1] "PCA1"  "PCA2"  "PCA7"  "PCA4"  "PCA5"  "PCA6"  "PCA24" "PCA26" "PCA32" "PCA33"</p></p>
+
+<hr />
+
+<span style="color:grey">Group E - Datadores</span>
+
+
+```{js, echo=FALSE}
+$('.title').css('color', 'Black')
+$('.author').css('color', 'grey')
+```
+
+
